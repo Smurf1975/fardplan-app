@@ -1,10 +1,10 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { createClient } from '@supabase/supabase-js';
 import {
-  Plane, BedDouble, Train, Car, Ship, MapPin, Clock, Sparkles, Trash2,
+  Plane, BedDouble, Train, Car, Ship, MapPin, Clock, Sparkles, Trash2, Pencil,
   ChevronRight, ChevronLeft, Loader2, Users, AlertTriangle, Search, Copy, Check,
   Calendar, CalendarCheck, CalendarX,
-  Bell, BellOff,
+  Bell, BellOff, X,
 } from 'lucide-react';
 
 // --- Supabase ---
@@ -197,7 +197,7 @@ function TripCard({ trip, onOpen }) {
     </button>
   );
 }
-function BookingRow({ booking, onDelete, onToggleTraveler, onCheckStatus, status }) {
+function BookingRow({ booking, onDelete, onEdit, onToggleTraveler, onCheckStatus, status }) {
   const meta = CATEGORY_META[booking.category]||CATEGORY_META.other;
   const Icon = meta.Icon;
   const time = formatTime(booking.startDateTime);
@@ -220,7 +220,10 @@ function BookingRow({ booking, onDelete, onToggleTraveler, onCheckStatus, status
             {booking.details && <p className="text-sm mt-2" style={{ color:'#A8B8B9' }}>{booking.details}</p>}
           </div>
         </div>
-        <button onClick={onDelete} style={{ color: COLORS.textFaint, flexShrink:0 }}><Trash2 size={16}/></button>
+        <div className="flex gap-2" style={{ flexShrink:0 }}>
+          <button onClick={onEdit} title="Redigera" style={{ color: COLORS.textFaint }}><Pencil size={15}/></button>
+          <button onClick={onDelete} title="Ta bort" style={{ color: COLORS.textFaint }}><Trash2 size={15}/></button>
+        </div>
       </div>
       {showStatus && (
         <div className="mt-3 pt-3" style={{ borderTop:`1px solid ${COLORS.border}` }}>
@@ -278,6 +281,10 @@ export default function FardplanApp() {
   const [pushStatus, setPushStatus]         = useState('idle'); // idle|loading|subscribed|denied|unsupported
   const [pushPickerOpen, setPushPickerOpen] = useState(false);
   const [pushUserName, setPushUserName]     = useState(null);
+
+  // Edit + confirm delete
+  const [editingBooking, setEditingBooking] = useState(null);
+  const [confirmDelete, setConfirmDelete]   = useState(null); // {type:'booking'|'trip', id?, label?}
 
   // Fonts
   useEffect(() => {
@@ -397,6 +404,27 @@ export default function FardplanApp() {
         if (error) console.error('Supabase load error:', error);
         setLoading(false);
       });
+  }, []);
+
+  // Realtime — synka live när annan familjemedlem gör ändringar
+  useEffect(() => {
+    const reload = () => {
+      supabase.from('bookings')
+        .select('booking_data')
+        .order('start_date_time', { ascending: true })
+        .then(({ data }) => {
+          if (data) {
+            const loaded = data.map(r => r.booking_data);
+            setBookings(loaded);
+            bookingsRef.current = loaded;
+          }
+        });
+    };
+    const channel = supabase
+      .channel('bookings-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, reload)
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
   }, []);
 
   // Persist: diff old vs new, upsert changed, delete removed
@@ -522,6 +550,20 @@ export default function FardplanApp() {
   }
 
   function handleDelete(id) { persist(bookingsRef.current.filter(b => b.id !== id)); }
+  function handleDeleteTrip(label) { persist(bookingsRef.current.filter(b => b.tripLabel !== label)); setView({ type:'list' }); }
+  function confirmDeleteNow() {
+    if (!confirmDelete) return;
+    if (confirmDelete.type === 'booking') handleDelete(confirmDelete.id);
+    if (confirmDelete.type === 'trip') handleDeleteTrip(confirmDelete.label);
+    setConfirmDelete(null);
+  }
+
+  function handleSaveEdit() {
+    if (!editingBooking?.title?.trim() || !editingBooking?.startDateTime) return;
+    persist(bookingsRef.current.map(b => b.id === editingBooking.id ? editingBooking : b));
+    setEditingBooking(null);
+  }
+
   function handleToggleTraveler(id, name) {
     persist(bookingsRef.current.map(b => b.id===id ? { ...b, travelers: toggleTraveler(b.travelers, name) } : b));
   }
@@ -615,6 +657,78 @@ export default function FardplanApp() {
               ))}
             </div>
             <button onClick={() => setPushPickerOpen(false)} className="text-xs mt-3 block" style={{ color: COLORS.textFaint }}>Avbryt</button>
+          </div>
+        </div>
+      )}
+
+      {/* Confirm delete dialog */}
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-5 pb-8" style={{ background:'rgba(0,0,0,0.6)' }}>
+          <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: COLORS.surface, border:`1px solid ${COLORS.border}` }}>
+            <p className="font-semibold mb-1" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>
+              {confirmDelete.type==='trip' ? 'Ta bort hela resan?' : 'Ta bort bokning?'}
+            </p>
+            <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>
+              {confirmDelete.type==='trip'
+                ? `"${confirmDelete.label}" och alla ${confirmDelete.count} bokningar tas bort permanent.`
+                : `"${confirmDelete.label}" tas bort permanent.`}
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={()=>setConfirmDelete(null)} className="px-4 py-2 rounded-xl text-sm" style={{ color: COLORS.textMuted }}>Avbryt</button>
+              <button onClick={confirmDeleteNow} className="px-4 py-2 rounded-xl text-sm font-semibold"
+                style={{ background: COLORS.danger, color: '#fff' }}>Ta bort</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Edit booking modal */}
+      {editingBooking && (
+        <div className="fixed inset-0 z-50 overflow-y-auto px-5 py-8" style={{ background:'rgba(0,0,0,0.7)' }}>
+          <div className="max-w-sm mx-auto rounded-2xl p-5" style={{ background: COLORS.surfaceRaised, border:`1px solid ${COLORS.borderInput}` }}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm font-semibold" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>Redigera bokning</p>
+              <button onClick={()=>setEditingBooking(null)} style={{ color: COLORS.textFaint }}><X size={18}/></button>
+            </div>
+            <div className="flex flex-col gap-3">
+              <LabeledInput label="Titel" value={editingBooking.title}
+                onChange={v=>setEditingBooking(b=>({...b,title:v}))} placeholder="T.ex. SAS SK1421"/>
+              <div className="grid grid-cols-2 gap-3">
+                <LabeledSelect label="Typ" value={editingBooking.category}
+                  onChange={v=>setEditingBooking(b=>({...b,category:v}))}
+                  options={Object.entries(CATEGORY_META).map(([value,m])=>({value,label:m.label}))}/>
+                <LabeledInput label="Leverantör" value={editingBooking.provider}
+                  onChange={v=>setEditingBooking(b=>({...b,provider:v}))}/>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <LabeledInput type="datetime-local" label="Start" value={toLocalInput(editingBooking.startDateTime)}
+                  onChange={v=>setEditingBooking(b=>({...b,startDateTime:fromLocalInput(v)}))}/>
+                <LabeledInput type="datetime-local" label="Slut" value={toLocalInput(editingBooking.endDateTime)}
+                  onChange={v=>setEditingBooking(b=>({...b,endDateTime:fromLocalInput(v)}))}/>
+              </div>
+              <LabeledInput label="Plats" value={editingBooking.location}
+                onChange={v=>setEditingBooking(b=>({...b,location:v}))}/>
+              <div className="grid grid-cols-2 gap-3">
+                <LabeledInput label="Bokningsnummer" value={editingBooking.confirmationCode}
+                  onChange={v=>setEditingBooking(b=>({...b,confirmationCode:v}))}/>
+                <LabeledInput label="Pris" value={editingBooking.price??''}
+                  onChange={v=>setEditingBooking(b=>({...b,price:v}))}/>
+              </div>
+              <LabeledInput label="Övrigt" value={editingBooking.details}
+                onChange={v=>setEditingBooking(b=>({...b,details:v}))}/>
+              <div>
+                <label className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.06em' }}>Vem reser</label>
+                <div className="mt-1">
+                  <TravelerPicker selected={editingBooking.travelers}
+                    onToggle={name=>setEditingBooking(b=>({...b,travelers:toggleTraveler(b.travelers,name)}))}/>
+                </div>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <button onClick={()=>setEditingBooking(null)} className="px-4 py-2 rounded-xl text-sm" style={{ color: COLORS.textMuted }}>Avbryt</button>
+              <button onClick={handleSaveEdit} className="px-4 py-2 rounded-xl text-sm font-semibold"
+                style={{ background: COLORS.teal, color: COLORS.bg }}>Spara ändringar</button>
+            </div>
           </div>
         </div>
       )}
@@ -805,14 +919,23 @@ export default function FardplanApp() {
       {/* Detail view */}
       {view.type==='detail' && detailTrip && (
         <div className="px-5 mt-6">
-          <button onClick={()=>setView({type:'list'})} className="flex items-center gap-1 text-sm mb-4" style={{ color: COLORS.textMuted }}>
-            <ChevronLeft size={16}/>Alla resor
-          </button>
+          <div className="flex items-center justify-between mb-4">
+            <button onClick={()=>setView({type:'list'})} className="flex items-center gap-1 text-sm" style={{ color: COLORS.textMuted }}>
+              <ChevronLeft size={16}/>Alla resor
+            </button>
+            <button onClick={()=>setConfirmDelete({type:'trip', label: detailTrip.label, count: detailTrip.bookings.length})}
+              className="flex items-center gap-1 text-xs px-3 py-1.5 rounded-xl"
+              style={{ color: COLORS.danger, border:`1px solid rgba(255,107,94,0.3)` }}>
+              <Trash2 size={13}/> Ta bort resa
+            </button>
+          </div>
           <h2 className="text-2xl font-bold mb-1" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>{detailTrip.label}</h2>
           <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>{formatDateLong(detailTrip.start)} – {formatDateLong(detailTrip.end)}</p>
           <div className="flex flex-col gap-3">
             {detailTrip.bookings.map(b=>(
-              <BookingRow key={b.id} booking={b} onDelete={()=>handleDelete(b.id)}
+              <BookingRow key={b.id} booking={b}
+                onDelete={()=>setConfirmDelete({type:'booking', id: b.id, label: b.title||b.category})}
+                onEdit={()=>setEditingBooking({...b})}
                 onToggleTraveler={handleToggleTraveler} onCheckStatus={checkStatus} status={statusMap[b.id]}/>
             ))}
           </div>

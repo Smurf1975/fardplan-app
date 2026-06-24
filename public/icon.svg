@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="96" fill="#15292C"/>
+  <g transform="translate(256,256)" fill="none" stroke="#FDB454" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Plane body -->
+    <path d="M-20,-120 L40,0 L-80,60 L-60,0 L-80,-20 Z" fill="#FDB454" stroke="none"/>
+    <!-- Wing -->
+    <path d="M-20,0 L100,60 L60,80 L-20,40 Z" fill="#5FD3C4" stroke="none"/>
+    <!-- Tail -->
+    <path d="M-60,40 L-20,120 L-60,100 L-80,60 Z" fill="#5FD3C4" stroke="none"/>
+  </g>
+</svg>
