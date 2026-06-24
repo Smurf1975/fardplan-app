@@ -260,6 +260,8 @@ export default function FardplanApp() {
   const [googleTokenExpiry, setGoogleTokenExpiry] = useState(null);
   const [calendarStatus, setCalendarStatus]     = useState(null); // null|'adding'|'added'|'error'
   const tokenClientRef = useRef(null);
+  const [quickTripOpen, setQuickTripOpen]       = useState(false);
+  const [quickTrip, setQuickTrip]               = useState({ tripLabel:'', startDate:'', endDate:'', travelers: FAMILY.map(f=>f.name) });
 
   // Fonts
   useEffect(() => {
@@ -437,6 +439,34 @@ export default function FardplanApp() {
       }
     }
   }
+  async function handleSaveQuickTrip() {
+    if (!quickTrip.tripLabel.trim() || !quickTrip.startDate) return;
+    const booking = {
+      ...emptyBooking(''),
+      title: quickTrip.tripLabel.trim(),
+      tripLabel: quickTrip.tripLabel.trim(),
+      category: 'other',
+      startDateTime: new Date(quickTrip.startDate).toISOString(),
+      endDateTime: quickTrip.endDate ? new Date(quickTrip.endDate).toISOString() : null,
+      travelers: quickTrip.travelers,
+    };
+    persist([...bookingsRef.current, booking]);
+    setView({ type:'detail', label: booking.tripLabel });
+    setQuickTripOpen(false);
+    setQuickTrip({ tripLabel:'', startDate:'', endDate:'', travelers: FAMILY.map(f=>f.name) });
+    if (googleConnected) {
+      setCalendarStatus('adding');
+      try {
+        await addBookingToCalendar(booking, googleToken);
+        setCalendarStatus('added');
+        setTimeout(() => setCalendarStatus(null), 3000);
+      } catch {
+        setCalendarStatus('error');
+        setTimeout(() => setCalendarStatus(null), 4000);
+      }
+    }
+  }
+
   function handleDelete(id) { persist(bookingsRef.current.filter(b => b.id !== id)); }
   function handleToggleTraveler(id, name) {
     persist(bookingsRef.current.map(b => b.id===id ? { ...b, travelers: toggleTraveler(b.travelers, name) } : b));
@@ -562,13 +592,49 @@ export default function FardplanApp() {
                   <AlertTriangle size={14} className="mt-0.5" style={{ flexShrink:0 }}/>{parseError}
                 </div>
               )}
-              <div className="flex justify-end mt-3">
+              <div className="flex justify-between items-center mt-3">
+                <button onClick={() => setQuickTripOpen(o => !o)}
+                  className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold"
+                  style={{ background: COLORS.surfaceRaised, color: COLORS.teal, border:`1px solid ${COLORS.teal}` }}>
+                  <MapPin size={16}/>Snabbresa
+                </button>
                 <button onClick={handleParse} disabled={parsing||!pasteText.trim()}
                   className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
                   style={{ background: COLORS.amber, color: COLORS.bg }}>
                   {parsing ? <><Loader2 size={16} className="animate-spin"/>Tolkar...</> : <><Sparkles size={16}/>Tolka bokning</>}
                 </button>
               </div>
+
+              {/* Snabbresa form */}
+              {quickTripOpen && (
+                <div className="mt-4 pt-4" style={{ borderTop:`1px solid ${COLORS.border}` }}>
+                  <p className="text-sm font-semibold mb-3" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>Snabbresa</p>
+                  <div className="flex flex-col gap-3">
+                    <LabeledInput label="Resans namn" value={quickTrip.tripLabel}
+                      onChange={v => setQuickTrip(q=>({...q, tripLabel:v}))}
+                      placeholder="T.ex. Mats Resa Skåne"/>
+                    <div className="grid grid-cols-2 gap-3">
+                      <LabeledInput type="date" label="Startdatum" value={quickTrip.startDate}
+                        onChange={v => setQuickTrip(q=>({...q, startDate:v}))}/>
+                      <LabeledInput type="date" label="Slutdatum" value={quickTrip.endDate}
+                        onChange={v => setQuickTrip(q=>({...q, endDate:v}))}/>
+                    </div>
+                    <div>
+                      <label className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.06em' }}>Vem reser</label>
+                      <div className="mt-1">
+                        <TravelerPicker selected={quickTrip.travelers}
+                          onToggle={name => setQuickTrip(q=>({...q, travelers: toggleTraveler(q.travelers, name)}))}/>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 mt-4">
+                    <button onClick={() => setQuickTripOpen(false)} className="px-4 py-2 rounded-xl text-sm" style={{ color: COLORS.textMuted }}>Avbryt</button>
+                    <button onClick={handleSaveQuickTrip} disabled={!quickTrip.tripLabel.trim()||!quickTrip.startDate}
+                      className="px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
+                      style={{ background: COLORS.teal, color: COLORS.bg }}>Lägg till resa</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
