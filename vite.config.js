@@ -5,5 +5,5 @@ export default defineConfig({
   plugins: [react()],
   // Om du döper GitHub-repot till "fardplan", sätt base till '/fardplan/'
   // Om du använder en custom domän, sätt base till '/'
-  base: '/fardplan/',
+  base: '/fardplan-app/',
 });
