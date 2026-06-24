@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   Plane, BedDouble, Train, Car, Ship, MapPin, Clock, Sparkles, Trash2,
   ChevronRight, ChevronLeft, Loader2, Users, AlertTriangle, Search, Copy, Check,
+  Calendar, CalendarCheck, CalendarX,
 } from 'lucide-react';
 
 // --- Supabase ---
@@ -255,6 +256,10 @@ export default function FardplanApp() {
   const [importText, setImportText]   = useState('');
   const [importError, setImportError] = useState(null);
   const [now, setNow]                 = useState(Date.now());
+  const [googleToken, setGoogleToken]           = useState(null);
+  const [googleTokenExpiry, setGoogleTokenExpiry] = useState(null);
+  const [calendarStatus, setCalendarStatus]     = useState(null); // null|'adding'|'added'|'error'
+  const tokenClientRef = useRef(null);
 
   // Fonts
   useEffect(() => {
@@ -268,6 +273,59 @@ export default function FardplanApp() {
 
   // Countdown ticker
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(id); }, []);
+
+  // Google Identity Services
+  useEffect(() => {
+    if (document.getElementById('gis-script')) return;
+    const script = document.createElement('script');
+    script.id = 'gis-script'; script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true; script.defer = true;
+    script.onload = () => {
+      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        scope: 'https://www.googleapis.com/auth/calendar.events',
+        callback: (response) => {
+          if (response.access_token) {
+            setGoogleToken(response.access_token);
+            setGoogleTokenExpiry(Date.now() + (response.expires_in - 60) * 1000);
+          }
+        },
+      });
+    };
+    document.head.appendChild(script);
+  }, []);
+
+  function connectGoogle() {
+    if (!tokenClientRef.current) return;
+    tokenClientRef.current.requestAccessToken();
+  }
+  const googleConnected = googleToken && googleTokenExpiry > Date.now();
+
+  async function addBookingToCalendar(booking, token) {
+    const emojiMap = { flight:'✈️', train:'🚂', ferry:'⛴️', hotel:'🏨', car:'🚗', other:'📍' };
+    const emoji = emojiMap[booking.category] || '📍';
+    const end = booking.endDateTime ||
+      new Date(new Date(booking.startDateTime).getTime() + 3600000).toISOString();
+    const desc = [
+      booking.provider && `Leverantör: ${booking.provider}`,
+      booking.confirmationCode && `Bokningsnr: ${booking.confirmationCode}`,
+      booking.details,
+      booking.travelers?.length && `Resenärer: ${booking.travelers.join(', ')}`,
+    ].filter(Boolean).join('\n');
+    const event = {
+      summary: `${emoji} ${booking.title}`,
+      location: booking.location || undefined,
+      description: desc || undefined,
+      start: { dateTime: booking.startDateTime, timeZone: 'Europe/Stockholm' },
+      end: { dateTime: end, timeZone: 'Europe/Stockholm' },
+    };
+    const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(event),
+    });
+    if (!res.ok) throw new Error(`Calendar error: ${res.status}`);
+  }
 
   // Load from Supabase
   useEffect(() => {
@@ -361,11 +419,23 @@ export default function FardplanApp() {
   }
 
   const updatePreview = (field, value) => setPreviewBooking(prev => ({ ...prev, [field]: value }));
-  function handleSavePreview() {
+  async function handleSavePreview() {
     if (!previewBooking.title.trim()||!previewBooking.startDateTime) return;
-    persist([...bookingsRef.current, previewBooking]);
-    setView({ type:'detail', label: previewBooking.tripLabel });
+    const booking = previewBooking;
+    persist([...bookingsRef.current, booking]);
+    setView({ type:'detail', label: booking.tripLabel });
     setPreviewBooking(null); setPasteText(''); setParseError(null);
+    if (googleConnected) {
+      setCalendarStatus('adding');
+      try {
+        await addBookingToCalendar(booking, googleToken);
+        setCalendarStatus('added');
+        setTimeout(() => setCalendarStatus(null), 3000);
+      } catch {
+        setCalendarStatus('error');
+        setTimeout(() => setCalendarStatus(null), 4000);
+      }
+    }
   }
   function handleDelete(id) { persist(bookingsRef.current.filter(b => b.id !== id)); }
   function handleToggleTraveler(id, name) {
@@ -414,10 +484,37 @@ export default function FardplanApp() {
           <p className="text-xs uppercase" style={{ color: COLORS.teal, letterSpacing:'0.16em' }}>Familjens</p>
           <h1 className="text-3xl font-bold" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>Färdplan</h1>
         </div>
-        <div className="flex items-center gap-1 text-xs mt-1" style={{ color: COLORS.textFaint }}>
-          <Users size={14}/> Delad
+        <div className="flex flex-col items-end gap-2 mt-1">
+          <div className="flex items-center gap-1 text-xs" style={{ color: COLORS.textFaint }}>
+            <Users size={14}/> Delad
+          </div>
+          <button onClick={connectGoogle}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold"
+            style={{ background: googleConnected ? 'rgba(95,211,196,0.12)' : COLORS.surfaceRaised,
+              color: googleConnected ? COLORS.teal : COLORS.textMuted,
+              border: `1px solid ${googleConnected ? COLORS.teal : COLORS.border}` }}>
+            {googleConnected ? <CalendarCheck size={13}/> : <Calendar size={13}/>}
+            {googleConnected ? 'Kalender ansluten' : 'Anslut Kalender'}
+          </button>
         </div>
       </div>
+
+      {/* Calendar status toast */}
+      {calendarStatus && (
+        <div className="px-5 mb-2">
+          <div className="rounded-xl px-4 py-2 flex items-center gap-2 text-sm"
+            style={{ background: calendarStatus==='added' ? 'rgba(95,211,196,0.1)' : 'rgba(255,107,94,0.08)',
+              border: `1px solid ${calendarStatus==='added' ? COLORS.teal : COLORS.danger}`,
+              color: calendarStatus==='added' ? COLORS.teal : COLORS.danger }}>
+            {calendarStatus==='adding' && <Loader2 size={14} className="animate-spin"/>}
+            {calendarStatus==='added' && <CalendarCheck size={14}/>}
+            {calendarStatus==='error' && <CalendarX size={14}/>}
+            {calendarStatus==='adding' && 'Lägger till i Google Kalender…'}
+            {calendarStatus==='added' && 'Lagt till i Google Kalender ✓'}
+            {calendarStatus==='error' && 'Kunde inte lägga till i kalender'}
+          </div>
+        </div>
+      )}
 
       {/* Countdown */}
       <div className="px-5">
