@@ -4,6 +4,7 @@ import {
   Plane, BedDouble, Train, Car, Ship, MapPin, Clock, Sparkles, Trash2,
   ChevronRight, ChevronLeft, Loader2, Users, AlertTriangle, Search, Copy, Check,
   Calendar, CalendarCheck, CalendarX,
+  Bell, BellOff,
 } from 'lucide-react';
 
 // --- Supabase ---
@@ -99,6 +100,16 @@ function diffParts(targetISO, nowMs) {
 }
 function splitDigits(value, length) {
   return String(Math.max(0, value)).padStart(length, '0').split('');
+}
+
+// --- Push helpers ---
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - base64String.length % 4) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const out = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) out[i] = rawData.charCodeAt(i);
+  return out;
 }
 
 // --- Components ---
@@ -258,10 +269,15 @@ export default function FardplanApp() {
   const [now, setNow]                 = useState(Date.now());
   const [googleToken, setGoogleToken]           = useState(null);
   const [googleTokenExpiry, setGoogleTokenExpiry] = useState(null);
-  const [calendarStatus, setCalendarStatus]     = useState(null); // null|'adding'|'added'|'error'
+  const [calendarStatus, setCalendarStatus]     = useState(null);
   const tokenClientRef = useRef(null);
   const [quickTripOpen, setQuickTripOpen]       = useState(false);
   const [quickTrip, setQuickTrip]               = useState({ tripLabel:'', startDate:'', endDate:'', travelers: FAMILY.map(f=>f.name) });
+
+  // Push notifications
+  const [pushStatus, setPushStatus]         = useState('idle'); // idle|loading|subscribed|denied|unsupported
+  const [pushPickerOpen, setPushPickerOpen] = useState(false);
+  const [pushUserName, setPushUserName]     = useState(null);
 
   // Fonts
   useEffect(() => {
@@ -296,6 +312,44 @@ export default function FardplanApp() {
     };
     document.head.appendChild(script);
   }, []);
+
+  // Register Service Worker + check existing push subscription
+  useEffect(() => {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+      setPushStatus('unsupported');
+      return;
+    }
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`)
+      .then(reg => reg.pushManager.getSubscription())
+      .then(sub => { if (sub) setPushStatus('subscribed'); })
+      .catch(err => console.warn('SW registration failed:', err));
+  }, []);
+
+  async function subscribePush(userName) {
+    setPushStatus('loading');
+    try {
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(import.meta.env.VITE_VAPID_PUBLIC_KEY),
+      });
+      const json = sub.toJSON();
+      const { error } = await supabase.from('push_subscriptions').upsert({
+        user_name: userName,
+        endpoint: json.endpoint,
+        p256dh: json.keys.p256dh,
+        auth: json.keys.auth,
+        user_agent: navigator.userAgent.slice(0, 200),
+      }, { onConflict: 'endpoint' });
+      if (error) throw error;
+      setPushStatus('subscribed');
+      setPushUserName(userName);
+      setPushPickerOpen(false);
+    } catch (e) {
+      setPushStatus(Notification.permission === 'denied' ? 'denied' : 'idle');
+      console.warn('Push subscribe failed:', e);
+    }
+  }
 
   function connectGoogle() {
     if (!tokenClientRef.current) return;
@@ -526,8 +580,44 @@ export default function FardplanApp() {
             {googleConnected ? <CalendarCheck size={13}/> : <Calendar size={13}/>}
             {googleConnected ? 'Kalender ansluten' : 'Anslut Kalender'}
           </button>
+          {pushStatus !== 'unsupported' && (
+            <button
+              onClick={() => pushStatus === 'subscribed' ? null : setPushPickerOpen(o => !o)}
+              disabled={pushStatus === 'loading'}
+              title={pushStatus === 'subscribed' ? `Notiser på${pushUserName ? ` (${pushUserName})` : ''}` : pushStatus === 'denied' ? 'Notiser blockerade i webbläsaren' : 'Aktivera push-notiser'}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold disabled:opacity-50"
+              style={{
+                background: pushStatus === 'subscribed' ? 'rgba(253,180,84,0.12)' : COLORS.surfaceRaised,
+                color: pushStatus === 'subscribed' ? COLORS.amber : pushStatus === 'denied' ? COLORS.danger : COLORS.textMuted,
+                border: `1px solid ${pushStatus === 'subscribed' ? COLORS.amber : pushStatus === 'denied' ? COLORS.danger : COLORS.border}`,
+              }}>
+              {pushStatus === 'loading' ? <Loader2 size={13} className="animate-spin"/> :
+               pushStatus === 'denied'  ? <BellOff size={13}/> : <Bell size={13}/>}
+              {pushStatus === 'subscribed' ? 'Notiser på' : pushStatus === 'denied' ? 'Blockerade' : 'Notiser'}
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Push-picker */}
+      {pushPickerOpen && (
+        <div className="px-5 mb-3">
+          <div className="rounded-2xl p-4" style={{ background: COLORS.surfaceRaised, border:`1px solid ${COLORS.border}` }}>
+            <p className="text-sm font-semibold mb-1" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>Vem använder den här enheten?</p>
+            <p className="text-xs mb-3" style={{ color: COLORS.textMuted }}>Du får notiser om dina bokningar.</p>
+            <div className="flex gap-2 flex-wrap">
+              {FAMILY.map(m => (
+                <button key={m.name} onClick={() => subscribePush(m.name)}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-xl text-sm font-semibold"
+                  style={{ background: COLORS.bg, color: m.color, border:`1.5px solid ${m.color}` }}>
+                  <Avatar member={m.name} size={20}/> {m.name}
+                </button>
+              ))}
+            </div>
+            <button onClick={() => setPushPickerOpen(false)} className="text-xs mt-3 block" style={{ color: COLORS.textFaint }}>Avbryt</button>
+          </div>
+        </div>
+      )}
 
       {/* Calendar status toast */}
       {calendarStatus && (
