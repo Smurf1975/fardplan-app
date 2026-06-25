@@ -3,7 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import {
   Plane, BedDouble, Train, Car, Ship, MapPin, Clock, Sparkles, Trash2, Pencil,
   ChevronRight, ChevronLeft, Loader2, Users, AlertTriangle, Search, Copy, Check,
-  Calendar, CalendarCheck, CalendarX,
+  Calendar, CalendarCheck, CalendarX, CalendarPlus,
   Bell, BellOff, X,
 } from 'lucide-react';
 
@@ -197,7 +197,7 @@ function TripCard({ trip, onOpen }) {
     </button>
   );
 }
-function BookingRow({ booking, onDelete, onEdit, onToggleTraveler, onCheckStatus, status }) {
+function BookingRow({ booking, onDelete, onEdit, onAddToCalendar, calendarState, onToggleTraveler, onCheckStatus, status }) {
   const meta = CATEGORY_META[booking.category]||CATEGORY_META.other;
   const Icon = meta.Icon;
   const time = formatTime(booking.startDateTime);
@@ -222,6 +222,13 @@ function BookingRow({ booking, onDelete, onEdit, onToggleTraveler, onCheckStatus
         </div>
         <div className="flex gap-2" style={{ flexShrink:0 }}>
           <button onClick={onEdit} title="Redigera" style={{ color: COLORS.textFaint }}><Pencil size={15}/></button>
+          <button onClick={onAddToCalendar} title="Lägg till i Google Kalender" disabled={calendarState?.loading}
+            style={{ color: calendarState?.added ? COLORS.teal : calendarState?.error ? COLORS.danger : COLORS.textFaint }}>
+            {calendarState?.loading ? <Loader2 size={15} className="animate-spin"/> :
+             calendarState?.added  ? <CalendarCheck size={15}/> :
+             calendarState?.error  ? <CalendarX size={15}/> :
+             <CalendarPlus size={15}/>}
+          </button>
           <button onClick={onDelete} title="Ta bort" style={{ color: COLORS.textFaint }}><Trash2 size={15}/></button>
         </div>
       </div>
@@ -285,6 +292,9 @@ export default function FardplanApp() {
   // Edit + confirm delete
   const [editingBooking, setEditingBooking] = useState(null);
   const [confirmDelete, setConfirmDelete]   = useState(null); // {type:'booking'|'trip', id?, label?}
+
+  // Per-bokning kalender-status
+  const [calendarMap, setCalendarMap]       = useState({});
 
   // Fonts
   useEffect(() => {
@@ -556,6 +566,19 @@ export default function FardplanApp() {
     if (confirmDelete.type === 'booking') handleDelete(confirmDelete.id);
     if (confirmDelete.type === 'trip') handleDeleteTrip(confirmDelete.label);
     setConfirmDelete(null);
+  }
+
+  async function handleAddToCalendar(booking) {
+    if (!googleConnected) { connectGoogle(); return; }
+    setCalendarMap(prev => ({ ...prev, [booking.id]: { loading: true } }));
+    try {
+      await addBookingToCalendar(booking, googleToken);
+      setCalendarMap(prev => ({ ...prev, [booking.id]: { added: true } }));
+      setTimeout(() => setCalendarMap(prev => ({ ...prev, [booking.id]: null })), 3000);
+    } catch {
+      setCalendarMap(prev => ({ ...prev, [booking.id]: { error: true } }));
+      setTimeout(() => setCalendarMap(prev => ({ ...prev, [booking.id]: null })), 4000);
+    }
   }
 
   function handleSaveEdit() {
@@ -936,6 +959,8 @@ export default function FardplanApp() {
               <BookingRow key={b.id} booking={b}
                 onDelete={()=>setConfirmDelete({type:'booking', id: b.id, label: b.title||b.category})}
                 onEdit={()=>setEditingBooking({...b})}
+                onAddToCalendar={()=>handleAddToCalendar(b)}
+                calendarState={calendarMap[b.id]}
                 onToggleTraveler={handleToggleTraveler} onCheckStatus={checkStatus} status={statusMap[b.id]}/>
             ))}
           </div>
