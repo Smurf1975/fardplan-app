@@ -293,6 +293,9 @@ export default function FardplanApp() {
   const [editingBooking, setEditingBooking] = useState(null);
   const [confirmDelete, setConfirmDelete]   = useState(null); // {type:'booking'|'trip', id?, label?}
 
+  // "Vem reser?" dialog för mail-importerade bokningar
+  const [newEmailBooking, setNewEmailBooking] = useState(null);
+
   // Per-bokning kalender-status
   const [calendarMap, setCalendarMap]       = useState({});
 
@@ -425,6 +428,14 @@ export default function FardplanApp() {
         .then(({ data }) => {
           if (data) {
             const loaded = data.map(r => r.booking_data);
+            // Detect new email bookings that need traveler confirmation
+            const currentIds = new Set(bookingsRef.current.map(b => b.id));
+            const newEmail = loaded.find(b =>
+              b.addedVia === 'email' && !currentIds.has(b.id) && !b.travelersConfirmed
+            );
+            if (newEmail) {
+              setNewEmailBooking({ ...newEmail, travelers: newEmail.travelers || [] });
+            }
             setBookings(loaded);
             bookingsRef.current = loaded;
           }
@@ -751,6 +762,41 @@ export default function FardplanApp() {
               <button onClick={()=>setEditingBooking(null)} className="px-4 py-2 rounded-xl text-sm" style={{ color: COLORS.textMuted }}>Avbryt</button>
               <button onClick={handleSaveEdit} className="px-4 py-2 rounded-xl text-sm font-semibold"
                 style={{ background: COLORS.teal, color: COLORS.bg }}>Spara ändringar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Vem reser? — dialog för mail-importerade bokningar */}
+      {newEmailBooking && (
+        <div className="fixed inset-0 z-50 flex items-end justify-center px-5 pb-8" style={{ background:'rgba(0,0,0,0.75)' }}>
+          <div className="w-full max-w-sm rounded-2xl p-5" style={{ background: COLORS.surface, border:`1px solid ${COLORS.border}` }}>
+            <div className="flex items-start gap-3 mb-3">
+              <div className="rounded-xl p-2" style={{ background: COLORS.surfaceRaised, flexShrink:0 }}>
+                <span style={{ fontSize:'1.1rem' }}>✉️</span>
+              </div>
+              <div>
+                <p className="font-semibold" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>Ny bokning via mail</p>
+                <p className="text-sm mt-0.5" style={{ color: COLORS.textMuted }}>{newEmailBooking.title}</p>
+                {newEmailBooking.tripLabel && (
+                  <p className="text-xs mt-0.5" style={{ color: COLORS.textFaint }}>Resa: {newEmailBooking.tripLabel}</p>
+                )}
+              </div>
+            </div>
+            <p className="text-sm mb-3" style={{ color: COLORS.textMuted }}>Vem är med på den här resan?</p>
+            <TravelerPicker
+              selected={newEmailBooking.travelers}
+              onToggle={name => setNewEmailBooking(b => ({ ...b, travelers: toggleTraveler(b.travelers, name) }))}
+            />
+            <div className="flex gap-3 justify-end mt-4">
+              <button onClick={() => setNewEmailBooking(null)}
+                className="px-4 py-2 rounded-xl text-sm" style={{ color: COLORS.textMuted }}>Senare</button>
+              <button onClick={() => {
+                const updated = { ...newEmailBooking, travelersConfirmed: true };
+                persist(bookingsRef.current.map(b => b.id === updated.id ? updated : b));
+                setNewEmailBooking(null);
+              }} className="px-4 py-2 rounded-xl text-sm font-semibold"
+                style={{ background: COLORS.teal, color: COLORS.bg }}>Bekräfta</button>
             </div>
           </div>
         </div>
