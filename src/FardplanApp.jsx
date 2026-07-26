@@ -258,7 +258,7 @@ function emptyBooking(rawText) {
 }
 
 // --- Main App ---
-export default function FardplanApp() {
+function FardplanMain() {
   const [bookings, setBookings] = useState([]);
   const bookingsRef = useRef(bookings);
   useEffect(() => { bookingsRef.current = bookings; }, [bookings]);
@@ -298,16 +298,6 @@ export default function FardplanApp() {
 
   // Per-bokning kalender-status
   const [calendarMap, setCalendarMap]       = useState({});
-
-  // Fonts
-  useEffect(() => {
-    if (!document.getElementById('fardplan-fonts')) {
-      const link = document.createElement('link');
-      link.id = 'fardplan-fonts'; link.rel = 'stylesheet';
-      link.href = 'https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Space+Mono:wght@400;700&family=Inter:wght@400;500;600;700&display=swap';
-      document.head.appendChild(link);
-    }
-  }, []);
 
   // Countdown ticker
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(id); }, []);
@@ -404,49 +394,39 @@ export default function FardplanApp() {
   }
 
   // Load from Supabase
-  useEffect(() => {
-    supabase.from('bookings')
+  const loadBookings = useCallback(async ({ detectEmail = false } = {}) => {
+    const { data, error } = await supabase.from('bookings')
       .select('booking_data')
-      .order('start_date_time', { ascending: true })
-      .then(({ data, error }) => {
-        if (data) {
-          const loaded = data.map(r => r.booking_data);
-          setBookings(loaded);
-          bookingsRef.current = loaded;
-        }
-        if (error) console.error('Supabase load error:', error);
-        setLoading(false);
-      });
+      .order('start_date_time', { ascending: true });
+    if (error) { console.error('Supabase load error:', error); return; }
+    const loaded = data.map(r => r.booking_data);
+    if (detectEmail) {
+      // Detect new email bookings that need traveler confirmation
+      const currentIds = new Set(bookingsRef.current.map(b => b.id));
+      const newEmail = loaded.find(b =>
+        b.addedVia === 'email' && !currentIds.has(b.id) && !b.travelersConfirmed
+      );
+      if (newEmail) {
+        setNewEmailBooking({ ...newEmail, travelers: newEmail.travelers || [] });
+      }
+    }
+    setBookings(loaded);
+    bookingsRef.current = loaded;
   }, []);
+
+  useEffect(() => {
+    loadBookings().finally(() => setLoading(false));
+  }, [loadBookings]);
 
   // Realtime — synka live när annan familjemedlem gör ändringar
   useEffect(() => {
-    const reload = () => {
-      supabase.from('bookings')
-        .select('booking_data')
-        .order('start_date_time', { ascending: true })
-        .then(({ data }) => {
-          if (data) {
-            const loaded = data.map(r => r.booking_data);
-            // Detect new email bookings that need traveler confirmation
-            const currentIds = new Set(bookingsRef.current.map(b => b.id));
-            const newEmail = loaded.find(b =>
-              b.addedVia === 'email' && !currentIds.has(b.id) && !b.travelersConfirmed
-            );
-            if (newEmail) {
-              setNewEmailBooking({ ...newEmail, travelers: newEmail.travelers || [] });
-            }
-            setBookings(loaded);
-            bookingsRef.current = loaded;
-          }
-        });
-    };
     const channel = supabase
       .channel('bookings-realtime')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' }, reload)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bookings' },
+        () => loadBookings({ detectEmail: true }))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
-  }, []);
+  }, [loadBookings]);
 
   // Persist: diff old vs new, upsert changed, delete removed
   const persist = useCallback(async (next) => {
@@ -614,7 +594,7 @@ export default function FardplanApp() {
 
   const trips = useMemo(() => groupByTrip(bookings), [bookings]);
   const tripLabels = useMemo(() => Array.from(new Set(bookings.map(b=>b.tripLabel).filter(Boolean))), [bookings]);
-  const startOfToday = useMemo(() => { const d=new Date(); d.setHours(0,0,0,0); return d; }, []);
+  const startOfToday = useMemo(() => { const d=new Date(now); d.setHours(0,0,0,0); return d; }, [now]);
   const upcomingTrips = trips.filter(t => new Date(t.end||t.start) >= startOfToday);
   const pastTrips = [...trips.filter(t => new Date(t.end||t.start) < startOfToday)].reverse();
   const nearestTrip = upcomingTrips[0];
@@ -626,6 +606,29 @@ export default function FardplanApp() {
     return (
       <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg, color: COLORS.textMuted }}>
         <Loader2 className="animate-spin" size={20}/>
+      </div>
+    );
+  }
+
+  // Widget-läge: bara nedräkningen (öppnas via /?widget)
+  if (new URLSearchParams(window.location.search).has('widget')) {
+    return (
+      <div className="min-h-screen flex items-center justify-center px-5" style={{ background: COLORS.bg, color: COLORS.text, fontFamily:"'Inter', sans-serif" }}
+        onClick={() => { window.location.href = import.meta.env.BASE_URL; }}>
+        {nearestTrip ? (
+          <div className="flex flex-col items-center gap-2 text-center">
+            <p className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.1em' }}>Nästa avgång</p>
+            <p className="text-2xl font-bold" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>{nearestTrip.label}</p>
+            <p className="text-sm" style={{ color: COLORS.textMuted }}>{formatDateLong(nearestTrip.start)}</p>
+            <div className="flex gap-4 mt-3">
+              <FlapGroup value={countdown.days} length={countdown.days>99?3:2} label="DAGAR"/>
+              <FlapGroup value={countdown.hours} length={2} label="TIMMAR"/>
+              <FlapGroup value={countdown.minutes} length={2} label="MIN"/>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm" style={{ color: COLORS.textMuted }}>Inga kommande resor</p>
+        )}
       </div>
     );
   }
@@ -1025,6 +1028,13 @@ export default function FardplanApp() {
         </div>
       )}
 
+      {/* Logga ut */}
+      <div className="px-5 mt-3">
+        <button onClick={() => supabase.auth.signOut()} className="text-sm" style={{ color: COLORS.textFaint }}>
+          Logga ut
+        </button>
+      </div>
+
       {/* Backup */}
       <div className="px-5 mt-8">
         <button onClick={()=>setBackupOpen(o=>!o)} className="text-sm" style={{ color: COLORS.textMuted }}>
@@ -1053,4 +1063,123 @@ export default function FardplanApp() {
       </div>
     </div>
   );
+}
+
+// --- Auth (magic link, VoxMats-mönstret) ---
+function AuthShell({ children }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center px-5" style={{ background: COLORS.bg, color: COLORS.text, fontFamily:"'Inter', sans-serif" }}>
+      <div className="w-full max-w-sm rounded-2xl p-6" style={{ background: COLORS.surface, border:`1px solid ${COLORS.border}` }}>
+        <p className="text-xs uppercase" style={{ color: COLORS.teal, letterSpacing:'0.16em' }}>Familjens</p>
+        <h1 className="text-2xl font-bold mb-4" style={{ fontFamily:"'Space Grotesk', sans-serif" }}>Färdplan</h1>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function LoginScreen() {
+  const [email, setEmail]     = useState('');
+  const [code, setCode]       = useState('');
+  const [sent, setSent]       = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError]     = useState(null);
+
+  async function sendCode(e) {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setSending(true); setError(null);
+    const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
+    setSending(false);
+    if (error) setError('Kunde inte skicka koden. Försök igen om en stund.');
+    else setSent(true);
+  }
+
+  async function verifyCode(e) {
+    e.preventDefault();
+    if (code.length !== 6) return;
+    setSending(true); setError(null);
+    const { error } = await supabase.auth.verifyOtp({ email: email.trim(), token: code, type: 'email' });
+    setSending(false);
+    // Vid succé byter onAuthStateChange vy åt oss — inget att göra här.
+    if (error) { setError('Fel eller för gammal kod. Begär en ny.'); setCode(''); }
+  }
+
+  if (sent) {
+    return (
+      <AuthShell>
+        <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>
+          En 6-siffrig kod har skickats till <span style={{ color: COLORS.text }}>{email}</span>.
+        </p>
+        <form onSubmit={verifyCode} className="flex flex-col gap-3">
+          <input inputMode="numeric" autoComplete="one-time-code" maxLength={6} autoFocus
+            value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))} placeholder="000000"
+            className="w-full rounded-lg px-3 py-2 text-center font-semibold"
+            style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text, fontSize:'1.5rem', letterSpacing:'0.4em' }} />
+          {error && <p className="text-sm" style={{ color: COLORS.danger }}>{error}</p>}
+          <button type="submit" disabled={sending || code.length !== 6}
+            className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
+            style={{ background: COLORS.amber, color: COLORS.bg }}>
+            {sending ? <><Loader2 size={16} className="animate-spin"/>Loggar in…</> : 'Logga in'}
+          </button>
+          <button type="button" onClick={() => { setSent(false); setCode(''); setError(null); }}
+            className="text-sm" style={{ color: COLORS.teal }}>Skicka ny kod</button>
+        </form>
+      </AuthShell>
+    );
+  }
+  return (
+    <AuthShell>
+      <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>Logga in med din e-post — du får en 6-siffrig kod, inget lösenord behövs.</p>
+      <form onSubmit={sendCode} className="flex flex-col gap-3">
+        <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="din@epost.se" autoComplete="email"
+          className="w-full rounded-lg px-3 py-2 text-sm"
+          style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }} />
+        {error && <p className="text-sm" style={{ color: COLORS.danger }}>{error}</p>}
+        <button type="submit" disabled={sending || !email.trim()}
+          className="flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold disabled:opacity-50"
+          style={{ background: COLORS.amber, color: COLORS.bg }}>
+          {sending ? <><Loader2 size={16} className="animate-spin"/>Skickar…</> : 'Skicka kod'}
+        </button>
+      </form>
+    </AuthShell>
+  );
+}
+
+export default function FardplanApp() {
+  const [session, setSession] = useState(undefined); // undefined = laddar, null = utloggad
+  const [allowed, setAllowed] = useState(null);      // null = okänt, true/false = kollat mot fardplan_users
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!session) { setAllowed(null); return; }
+    supabase.from('fardplan_users').select('email').eq('email', session.user.email)
+      .then(({ data }) => setAllowed((data || []).length > 0));
+  }, [session]);
+
+  if (session === undefined || (session && allowed === null)) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: COLORS.bg, color: COLORS.textMuted }}>
+        <Loader2 className="animate-spin" size={20}/>
+      </div>
+    );
+  }
+  if (!session) return <LoginScreen/>;
+  if (!allowed) {
+    return (
+      <AuthShell>
+        <p className="text-sm mb-4" style={{ color: COLORS.textMuted }}>
+          <span style={{ color: COLORS.text }}>{session.user.email}</span> har inte åtkomst till Färdplan.
+          Be Mats lägga till din e-postadress.
+        </p>
+        <button onClick={() => supabase.auth.signOut()} className="text-sm font-semibold" style={{ color: COLORS.teal }}>Logga ut</button>
+      </AuthShell>
+    );
+  }
+  return <FardplanMain/>;
 }

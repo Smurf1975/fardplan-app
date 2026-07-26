@@ -1,7 +1,7 @@
 // Färdplan — Service Worker
 // Hanterar Web Push-notifikationer
 
-const APP_URL = 'https://Smurf1975.github.io/fardplan-app/';
+const APP_URL = self.registration.scope; // funkar på vilken domän appen än ligger
 
 // ─── Push-event ────────────────────────────────────────────────────────────
 self.addEventListener('push', (event) => {
@@ -54,8 +54,21 @@ self.addEventListener('notificationclick', (event) => {
   );
 });
 
-// ─── Install & Activate (minimalt — ingen offline-cache) ──────────────────
+// ─── Install & Activate ────────────────────────────────────────────────────
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (event) => {
   event.waitUntil(clients.claim());
+});
+
+// ─── Offline-skal: nätet först, cachad startsida som reserv ────────────────
+const CACHE = 'fardplan-shell-v1';
+self.addEventListener('fetch', (event) => {
+  if (event.request.mode !== 'navigate') return;
+  event.respondWith(
+    fetch(event.request).then((res) => {
+      const copy = res.clone();
+      caches.open(CACHE).then((c) => c.put('/', copy));
+      return res;
+    }).catch(() => caches.match('/'))
+  );
 });
