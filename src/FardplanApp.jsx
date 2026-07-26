@@ -279,8 +279,8 @@ function FardplanMain() {
   const [now, setNow]                 = useState(Date.now());
   const [googleToken, setGoogleToken]           = useState(null);
   const [googleTokenExpiry, setGoogleTokenExpiry] = useState(null);
+  const [googleScope, setGoogleScope]           = useState('');
   const [calendarStatus, setCalendarStatus]     = useState(null);
-  const tokenClientRef = useRef(null);
   const [quickTripOpen, setQuickTripOpen]       = useState(false);
   const [quickTrip, setQuickTrip]               = useState({ tripLabel:'', startDate:'', endDate:'', travelers: FAMILY.map(f=>f.name) });
 
@@ -302,26 +302,48 @@ function FardplanMain() {
   // Countdown ticker
   useEffect(() => { const id = setInterval(() => setNow(Date.now()), 60000); return () => clearInterval(id); }, []);
 
-  // Google Identity Services
-  useEffect(() => {
-    if (document.getElementById('gis-script')) return;
-    const script = document.createElement('script');
-    script.id = 'gis-script'; script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true; script.defer = true;
-    script.onload = () => {
-      tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/calendar.events',
-        callback: (response) => {
-          if (response.access_token) {
-            setGoogleToken(response.access_token);
-            setGoogleTokenExpiry(Date.now() + (response.expires_in - 60) * 1000);
-          }
-        },
-      });
-    };
-    document.head.appendChild(script);
+  // Google Calendar via edge-funktionen google-proxy. Refresh-token ligger
+  // server-side och delas med dashboarden, så appen behöver varken GIS-script
+  // eller inloggningspopup — den hämtar bara en färsk access-token.
+  const refreshGoogleToken = useCallback(async () => {
+    const { data } = await supabase.auth.getSession();
+    const jwt = data.session?.access_token;
+    if (!jwt) return { retryIn: 300 };
+    try {
+      const res = await fetch(
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/google-proxy?action=token`,
+        { headers: { Authorization: `Bearer ${jwt}` } },
+      );
+      const json = await res.json().catch(() => ({}));
+      if (res.ok && json.access_token) {
+        setGoogleToken(json.access_token);
+        setGoogleTokenExpiry(Date.now() + (json.expires_in - 60) * 1000);
+        setGoogleScope(json.scope || '');
+        // Förnya två minuter före utgång så en långsam begäran inte hinner
+        // lämna appen med en död token.
+        return { retryIn: Math.max(json.expires_in - 120, 60) };
+      }
+      // Åtkomsten saknas eller är återkallad — sluta försöka och låt knappen
+      // ta över, annars hamrar vi på proxyn i onödan.
+      if (json.error === 'no_refresh_token' || json.error === 'invalid_grant') {
+        setGoogleToken(null);
+        return { retryIn: null };
+      }
+      return { retryIn: 300 };
+    } catch {
+      return { retryIn: 300 }; // nätverksstrul, inte ett nej
+    }
   }, []);
+
+  useEffect(() => {
+    let timer, cancelled = false;
+    (async function cycle() {
+      const { retryIn } = await refreshGoogleToken();
+      if (cancelled || retryIn == null) return;
+      timer = setTimeout(cycle, retryIn * 1000);
+    })();
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [refreshGoogleToken]);
 
   // Register Service Worker + check existing push subscription
   useEffect(() => {
@@ -361,11 +383,17 @@ function FardplanMain() {
     }
   }
 
+  // Consent-flödet bor i dashboarden — den äger Google-klientens redirect-URI.
+  // Härifrån räcker det att öppna den; Färdplan plockar upp token vid nästa
+  // förnyelse.
   function connectGoogle() {
-    if (!tokenClientRef.current) return;
-    tokenClientRef.current.requestAccessToken();
+    window.open('https://privat-dashboard-inky.vercel.app', '_blank', 'noopener');
   }
-  const googleConnected = googleToken && googleTokenExpiry > Date.now();
+  // calendar.events krävs för att skapa poster. Utan det scopet är token
+  // giltig men värdelös här, så visa den inte som ansluten.
+  const googleConnected = googleToken
+    && googleTokenExpiry > Date.now()
+    && googleScope.includes('calendar.events');
 
   async function addBookingToCalendar(booking, token) {
     const emojiMap = { flight:'✈️', train:'🚂', ferry:'⛴️', hotel:'🏨', car:'🚗', other:'📍' };
