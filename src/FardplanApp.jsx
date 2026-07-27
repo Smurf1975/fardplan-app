@@ -395,6 +395,11 @@ function FardplanMain() {
     && googleTokenExpiry > Date.now()
     && googleScope.includes('calendar.events');
 
+  // Resor hör hemma i familjens delade kalender, inte i Mats privata ("primary"
+  // = mats.enmark@bredband.net). Byts kalendern någon gång är det här ID:t som
+  // ska ändras — hämta det i Google Kalender under Inställningar → Kalender-ID.
+  const FAMILY_CALENDAR_ID = '6e8fd537732c7a2c12f1b0ffe2eb417775629df21f036530be50b4130b1ea755@group.calendar.google.com';
+
   async function addBookingToCalendar(booking, token) {
     const emojiMap = { flight:'✈️', train:'🚂', ferry:'⛴️', hotel:'🏨', car:'🚗', other:'📍' };
     const emoji = emojiMap[booking.category] || '📍';
@@ -413,7 +418,8 @@ function FardplanMain() {
       start: { dateTime: booking.startDateTime, timeZone: 'Europe/Stockholm' },
       end: { dateTime: end, timeZone: 'Europe/Stockholm' },
     };
-    const res = await fetch('https://www.googleapis.com/calendar/v3/calendars/primary/events', {
+    const res = await fetch(
+      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(FAMILY_CALENDAR_ID)}/events`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(event),
@@ -602,8 +608,13 @@ function FardplanMain() {
 
   function handleSaveEdit() {
     if (!editingBooking?.title?.trim() || !editingBooking?.startDateTime) return;
+    if (!editingBooking?.tripLabel?.trim()) return; // annars hamnar den i "Okänd resa"
+    const moved = bookingsRef.current.find(b => b.id === editingBooking.id)?.tripLabel !== editingBooking.tripLabel;
     persist(bookingsRef.current.map(b => b.id === editingBooking.id ? editingBooking : b));
     setEditingBooking(null);
+    // Flyttades bokningen bort från resan man tittar på, följ med dit istället
+    // för att lämna kvar användaren i en vy bokningen inte längre hör till.
+    if (moved) setView({ type:'detail', label: editingBooking.tripLabel });
   }
 
   function handleToggleTraveler(id, name) {
@@ -628,6 +639,7 @@ function FardplanMain() {
   const nearestTrip = upcomingTrips[0];
   const countdown = nearestTrip ? diffParts(nearestTrip.start, now) : null;
   const isExistingTrip = previewBooking ? tripLabels.includes(previewBooking.tripLabel) : false;
+  const editTripExists = editingBooking ? tripLabels.includes(editingBooking.tripLabel) : false;
   const detailTrip = view.type==='detail' ? trips.find(t=>t.label===view.label) : null;
 
   if (loading) {
@@ -786,6 +798,26 @@ function FardplanMain() {
                 <div className="mt-1">
                   <TravelerPicker selected={editingBooking.travelers}
                     onToggle={name=>setEditingBooking(b=>({...b,travelers:toggleTraveler(b.travelers,name)}))}/>
+                </div>
+              </div>
+              {/* Flytta bokningen mellan resor. Flyttas alla bokningar till
+                  samma namn är två resor därmed sammanslagna. */}
+              <div>
+                <label className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.06em' }}>Resa</label>
+                <div className="flex flex-col gap-2 mt-1">
+                  <select value={editTripExists ? editingBooking.tripLabel : '__new__'}
+                    onChange={e=>setEditingBooking(b=>({...b, tripLabel: e.target.value==='__new__' ? '' : e.target.value}))}
+                    className="w-full rounded-lg px-3 py-2 text-sm"
+                    style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }}>
+                    {tripLabels.map(l=><option key={l} value={l}>{l}</option>)}
+                    <option value="__new__">+ Ny resa</option>
+                  </select>
+                  {!editTripExists && (
+                    <input value={editingBooking.tripLabel} onChange={e=>setEditingBooking(b=>({...b,tripLabel:e.target.value}))}
+                      placeholder="Namn på resan, t.ex. Alanya juli 2026"
+                      className="w-full rounded-lg px-3 py-2 text-sm"
+                      style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }}/>
+                  )}
                 </div>
               </div>
             </div>
