@@ -91,6 +91,23 @@ function groupByTrip(bookings) {
   trips.sort((a,b) => new Date(a.start) - new Date(b.start));
   return trips;
 }
+
+// Hittar en befintlig resa som bokningen tidsmässigt ligger inom. Tolkningen
+// känner inte till vilka resor som finns och hittar därför gärna på ett nytt
+// namn för en bokning som hör till en resa man redan lagt upp.
+// Ett dygns marginal i vardera änden: hotellet checkar ofta in samma dag som
+// resan börjar, och hemresan ligger gärna dagen efter sista bokningen.
+function findOverlappingTrip(trips, startISO) {
+  if (!startISO) return null;
+  const t = new Date(startISO).getTime();
+  if (Number.isNaN(t)) return null;
+  const DAY = 86400000;
+  return trips.find(trip => {
+    const s = new Date(trip.start).getTime() - DAY;
+    const e = new Date(trip.end || trip.start).getTime() + DAY;
+    return t >= s && t <= e;
+  }) || null;
+}
 function diffParts(targetISO, nowMs) {
   let diff = Math.max(0, new Date(targetISO).getTime() - nowMs);
   const days = Math.floor(diff / 86400000); diff -= days * 86400000;
@@ -281,6 +298,7 @@ function FardplanMain() {
   const [googleTokenExpiry, setGoogleTokenExpiry] = useState(null);
   const [googleScope, setGoogleScope]           = useState('');
   const [calendarStatus, setCalendarStatus]     = useState(null);
+  const [autoMatchedTrip, setAutoMatchedTrip]   = useState(null); // resa som datummatchades vid tolkning
   const [quickTripOpen, setQuickTripOpen]       = useState(false);
   const [quickTrip, setQuickTrip]               = useState({ tripLabel:'', startDate:'', endDate:'', travelers: FAMILY.map(f=>f.name) });
 
@@ -507,6 +525,10 @@ function FardplanMain() {
       if (error) throw error;
       const textBlocks = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join('\n');
       const parsed = JSON.parse(textBlocks.replace(/```json|```/g,'').trim());
+      // Ligger bokningen inom en resa som redan finns väger det tyngre än
+      // tolkningens gissning — den vet inte vad som redan är upplagt.
+      const overlap = findOverlappingTrip(trips, parsed.startDateTime);
+      setAutoMatchedTrip(overlap?.label || null);
       setPreviewBooking({
         ...emptyBooking(pasteText),
         category: parsed.category||'other', title: parsed.title||'',
@@ -514,7 +536,8 @@ function FardplanMain() {
         endDateTime: parsed.endDateTime||null, location: parsed.location||'',
         confirmationCode: parsed.confirmationCode||'', passengers: parsed.passengers||'',
         price: parsed.price??null, currency: parsed.currency||'',
-        details: parsed.details||'', tripLabel: parsed.tripLabelSuggestion||'Ny resa',
+        details: parsed.details||'',
+        tripLabel: overlap?.label || parsed.tripLabelSuggestion || 'Ny resa',
       });
     } catch (e) {
       setParseError('Kunde inte tolka texten automatiskt. Fyll i uppgifterna manuellt nedan.');
@@ -543,7 +566,7 @@ function FardplanMain() {
     const booking = previewBooking;
     persist([...bookingsRef.current, booking]);
     setView({ type:'detail', label: booking.tripLabel });
-    setPreviewBooking(null); setPasteText(''); setParseError(null);
+    setPreviewBooking(null); setPasteText(''); setParseError(null); setAutoMatchedTrip(null);
     if (googleConnected) {
       setCalendarStatus('adding');
       try {
@@ -1004,6 +1027,11 @@ function FardplanMain() {
                   </div>
                   <div>
                     <label className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.06em' }}>Resa</label>
+                    {autoMatchedTrip && previewBooking.tripLabel === autoMatchedTrip && (
+                      <p className="text-xs mt-1" style={{ color: COLORS.teal }}>
+                        Datumen ligger inom {autoMatchedTrip} — lägger den där. Välj annan i listan om det är fel.
+                      </p>
+                    )}
                     <div className="flex flex-col gap-2 mt-1">
                       <select value={isExistingTrip ? previewBooking.tripLabel : '__new__'}
                         onChange={e=>updatePreview('tripLabel', e.target.value==='__new__' ? '' : e.target.value)}
