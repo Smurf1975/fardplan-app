@@ -793,6 +793,26 @@ function FardplanMain() {
             <div className="flex flex-col gap-3">
               <LabeledInput label="Titel" value={editingBooking.title}
                 onChange={v=>setEditingBooking(b=>({...b,title:v}))} placeholder="T.ex. SAS SK1421"/>
+              {/* Flytta bokningen mellan resor. Flyttas alla bokningar till
+                  samma namn är två resor därmed sammanslagna. */}
+              <div>
+                <label className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.06em' }}>Resa</label>
+                <div className="flex flex-col gap-2 mt-1">
+                  <select value={editTripExists ? editingBooking.tripLabel : '__new__'}
+                    onChange={e=>setEditingBooking(b=>({...b, tripLabel: e.target.value==='__new__' ? '' : e.target.value}))}
+                    className="w-full rounded-lg px-3 py-2 text-sm"
+                    style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }}>
+                    {tripLabels.map(l=><option key={l} value={l}>{l}</option>)}
+                    <option value="__new__">+ Ny resa</option>
+                  </select>
+                  {!editTripExists && (
+                    <input value={editingBooking.tripLabel} onChange={e=>setEditingBooking(b=>({...b,tripLabel:e.target.value}))}
+                      placeholder="Namn på resan, t.ex. Alanya juli 2026"
+                      className="w-full rounded-lg px-3 py-2 text-sm"
+                      style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }}/>
+                  )}
+                </div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <LabeledSelect label="Typ" value={editingBooking.category}
                   onChange={v=>setEditingBooking(b=>({...b,category:v}))}
@@ -821,26 +841,6 @@ function FardplanMain() {
                 <div className="mt-1">
                   <TravelerPicker selected={editingBooking.travelers}
                     onToggle={name=>setEditingBooking(b=>({...b,travelers:toggleTraveler(b.travelers,name)}))}/>
-                </div>
-              </div>
-              {/* Flytta bokningen mellan resor. Flyttas alla bokningar till
-                  samma namn är två resor därmed sammanslagna. */}
-              <div>
-                <label className="text-xs uppercase" style={{ color: COLORS.textMuted, letterSpacing:'0.06em' }}>Resa</label>
-                <div className="flex flex-col gap-2 mt-1">
-                  <select value={editTripExists ? editingBooking.tripLabel : '__new__'}
-                    onChange={e=>setEditingBooking(b=>({...b, tripLabel: e.target.value==='__new__' ? '' : e.target.value}))}
-                    className="w-full rounded-lg px-3 py-2 text-sm"
-                    style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }}>
-                    {tripLabels.map(l=><option key={l} value={l}>{l}</option>)}
-                    <option value="__new__">+ Ny resa</option>
-                  </select>
-                  {!editTripExists && (
-                    <input value={editingBooking.tripLabel} onChange={e=>setEditingBooking(b=>({...b,tripLabel:e.target.value}))}
-                      placeholder="Namn på resan, t.ex. Alanya juli 2026"
-                      className="w-full rounded-lg px-3 py-2 text-sm"
-                      style={{ background: COLORS.bg, border:`1px solid ${COLORS.borderInput}`, color: COLORS.text }}/>
-                  )}
                 </div>
               </div>
             </div>
